@@ -10,6 +10,7 @@ export type Product = {
 
 export type Lot = {
   id?: number;
+  code: string;
   product: string;
   productCode: string;
   lot: string;
@@ -35,6 +36,20 @@ export type PurchaseOrder = { id: number; code: string; supplier: string; item: 
 export type ProductionOrder = { id: number; code: string; product: string; product_id: number; planned_quantity: number; line: string; schedule: string; status: string };
 export type Inspection = { id: number; lot: string; product: string; test: string; sample: string; status: string; notes: string };
 export type Dispatch = { id: number; code: string; client: string; route: string; lot: string; product: string; quantity: number; scheduled_at: string; status: string };
+export type Dashboard = {
+  products: number;
+  stock: number;
+  lowStock: number;
+  expiring: number;
+  blocked: number;
+  movementsToday: number;
+  policies: { inventory: string; rotation: string; traceability: string; qualityGate: string };
+};
+export type Warehouse = { id: number; code: string; name: string; site: string; status: string };
+export type Traceability = {
+  lot: Lot;
+  events: { stage: string; eventDate: string; detail: string; place: string; user: string }[];
+};
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
@@ -45,8 +60,13 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   products: () => request<Product[]>("/api/products"),
+  warehouses: () => request<Warehouse[]>("/api/warehouses"),
   lots: () => request<Lot[]>("/api/lots"),
+  createLot: (value: { productCode: string; code: string; quantity: number; warehouse: string; expiry: string }) =>
+    request<Lot>("/api/lots", { method: "POST", body: JSON.stringify(value) }),
+  traceability: (lotCode: string) => request<Traceability>(`/api/traceability/${encodeURIComponent(lotCode)}`),
   movements: () => request<Movement[]>("/api/movements"),
+  dashboard: () => request<Dashboard>("/api/dashboard"),
   createProduct: (product: Omit<Product, "id" | "stock" | "status">) =>
     request<Product>("/api/products", { method: "POST", body: JSON.stringify(product) }),
   createMovement: (movement: { type: string; lotCode: string; quantity: number; origin: string; destination: string; responsible: string }) =>

@@ -21,6 +21,21 @@ El proyecto está compuesto por:
 - Reglas de inventario y bloqueo de despachos para lotes no liberados.
 - Trazabilidad de los movimientos asociados a un lote.
 
+## Alineación con el Informe Final
+
+La aplicación representa el piloto integrado propuesto para PIL Andina S.A.:
+
+- Inventario perpetuo con stock calculado desde los lotes y movimientos registrados.
+- Rotación FEFO para productos perecederos y FIFO para materiales apropiados.
+- Puntos de reorden, stock de seguridad y clasificación ABC almacenados en los datos maestros.
+- Control por lote desde la recepción hasta el despacho.
+- Puerta de calidad: un lote retenido, rechazado o vencido no puede despacharse.
+- Trazabilidad hacia atrás y hacia adelante mediante el historial de movimientos.
+- Panel de control con stock total, bajo stock, vencimientos, lotes bloqueados y movimientos del día.
+- Flujo integrado de abastecimiento, recepción, producción, calidad, almacenamiento y distribución.
+
+El endpoint `GET /api/dashboard` calcula los indicadores del panel directamente desde SQLite. Las reglas de rotación y calidad se muestran en la pantalla de resumen para que la operación pueda validarse contra los criterios del piloto.
+
 ## Requisitos
 
 - Node.js 20 o superior.
@@ -106,6 +121,7 @@ El servidor de desarrollo redirige automáticamente las solicitudes `/api` hacia
 GET  /api/products
 POST /api/products
 GET  /api/lots
+GET  /api/traceability/:lotCode
 GET  /api/movements
 POST /api/movements
 ```

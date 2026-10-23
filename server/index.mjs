@@ -20,6 +20,10 @@ database.exec(`
     unit TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'Activo',
     minimum_stock REAL NOT NULL DEFAULT 0,
+    reorder_point REAL NOT NULL DEFAULT 0,
+    safety_stock REAL NOT NULL DEFAULT 0,
+    abc_class TEXT NOT NULL DEFAULT 'C',
+    rotation_policy TEXT NOT NULL DEFAULT 'FEFO',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS warehouses (
@@ -101,6 +105,15 @@ database.exec(`
   );
 `);
 
+const addColumnIfMissing = (table, column, definition) => {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((item) => item.name === column)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+};
+addColumnIfMissing("products", "reorder_point", "REAL NOT NULL DEFAULT 0");
+addColumnIfMissing("products", "safety_stock", "REAL NOT NULL DEFAULT 0");
+addColumnIfMissing("products", "abc_class", "TEXT NOT NULL DEFAULT 'C'");
+addColumnIfMissing("products", "rotation_policy", "TEXT NOT NULL DEFAULT 'FEFO'");
+
 const seed = database.transaction(() => {
   if (database.prepare("SELECT COUNT(*) count FROM products").get().count > 0) return;
   const addProduct = database.prepare("INSERT INTO products (code,name,category,unit,status,minimum_stock) VALUES (?,?,?,?,?,?)");
@@ -157,6 +170,23 @@ const seedOperationalTables = database.transaction(() => {
   }
 });
 seedOperationalTables();
+database.prepare("UPDATE products SET reorder_point = CASE code WHEN 'LAC-001' THEN 3000 WHEN 'LAC-002' THEN 1200 WHEN 'YOG-014' THEN 800 WHEN 'QUE-008' THEN 150 WHEN 'MAN-003' THEN 500 ELSE 100 END, safety_stock = CASE code WHEN 'LAC-001' THEN 1000 WHEN 'LAC-002' THEN 400 WHEN 'YOG-014' THEN 250 WHEN 'QUE-008' THEN 50 WHEN 'MAN-003' THEN 150 ELSE 20 END, abc_class = CASE code WHEN 'LAC-001' THEN 'A' WHEN 'LAC-002' THEN 'A' WHEN 'YOG-014' THEN 'B' ELSE 'C' END, rotation_policy = CASE WHEN unit IN ('Unidad','Litro') THEN 'FEFO' ELSE 'FIFO' END WHERE reorder_point = 0").run();
+database.exec(`
+  UPDATE lots
+  SET quality = COALESCE((
+    SELECT CASE i.status
+      WHEN 'Liberado' THEN 'Liberado'
+      WHEN 'Retenido' THEN 'Retenido'
+      WHEN 'Rechazado' THEN 'Rechazado'
+      ELSE 'Pendiente'
+    END
+    FROM quality_inspections i
+    WHERE i.lot_id = lots.id
+    ORDER BY i.id DESC
+    LIMIT 1
+  ), quality)
+  WHERE EXISTS (SELECT 1 FROM quality_inspections i WHERE i.lot_id = lots.id);
+`);
 
 const app = express();
 app.use(cors());
@@ -171,15 +201,24 @@ const lotQuery = database.prepare(`
   SELECT l.*, p.name product, p.code productCode, p.unit
   FROM lots l JOIN products p ON p.id = l.product_id ORDER BY l.expiry
 `);
-const toPublicLot = (lot) => ({ ...lot, quantity: lot.quantity.toLocaleString("es-BO"), expiry: new Date(`${lot.expiry}T12:00:00`).toLocaleDateString("es-BO", { day: "2-digit", month: "short", year: "numeric" }), expiryNote: lot.quality === "Retenido" ? "Revisión requerida" : "Vigente" });
+const toPublicLot = (lot) => ({ ...lot, lot: lot.code, quantity: lot.quantity.toLocaleString("es-BO"), expiry: new Date(`${lot.expiry}T12:00:00`).toLocaleDateString("es-BO", { day: "2-digit", month: "short", year: "numeric" }), expiryNote: lot.quality === "Retenido" ? "Revisión requerida" : "Vigente" });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/api/dashboard", (_req, res) => {
+  const products = database.prepare("SELECT COUNT(*) count, COALESCE(SUM(stock), 0) stock FROM (SELECT p.id, COALESCE(SUM(l.quantity), 0) stock FROM products p LEFT JOIN lots l ON l.product_id=p.id GROUP BY p.id)").get();
+  const lowStock = database.prepare("SELECT COUNT(*) count FROM (SELECT p.id FROM products p LEFT JOIN lots l ON l.product_id=p.id GROUP BY p.id HAVING COALESCE(SUM(l.quantity),0) <= p.reorder_point)").get().count;
+  const expiring = database.prepare("SELECT COUNT(*) count FROM lots WHERE date(expiry) <= date('now', '+15 day') AND date(expiry) >= date('now')").get().count;
+  const blocked = database.prepare("SELECT COUNT(*) count FROM lots WHERE quality <> 'Liberado' OR date(expiry) < date('now')").get().count;
+  const movementsToday = database.prepare("SELECT COUNT(*) count FROM movements WHERE date(created_at) = date('now')").get().count;
+  res.json({ products: products.count, stock: products.stock, lowStock, expiring, blocked, movementsToday, policies: { inventory: "Perpetuo", rotation: "FEFO para perecederos / FIFO para materiales", traceability: "Por lote", qualityGate: "Despacho bloqueado si no está liberado" } });
+});
 app.get("/api/products", (_req, res) => res.json(productQuery.all()));
+app.get("/api/warehouses", (_req, res) => res.json(database.prepare("SELECT * FROM warehouses ORDER BY name").all()));
 app.post("/api/products", (req, res) => {
-  const { code, name, category, unit } = req.body;
+  const { code, name, category, unit, reorderPoint = 0, safetyStock = 0, abcClass = "C", rotationPolicy = "FEFO" } = req.body;
   if (![code, name, category, unit].every((value) => typeof value === "string" && value.trim())) return res.status(400).json({ error: "Código, nombre, categoría y unidad son obligatorios." });
   try {
-    const result = database.prepare("INSERT INTO products (code,name,category,unit) VALUES (?,?,?,?)").run(code.trim(), name.trim(), category.trim(), unit.trim());
+    const result = database.prepare("INSERT INTO products (code,name,category,unit,reorder_point,safety_stock,abc_class,rotation_policy) VALUES (?,?,?,?,?,?,?,?)").run(code.trim(), name.trim(), category.trim(), unit.trim(), Number(reorderPoint), Number(safetyStock), abcClass, rotationPolicy);
     res.status(201).json(database.prepare("SELECT * FROM products WHERE id = ?").get(result.lastInsertRowid));
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return res.status(409).json({ error: "El código del producto ya existe." });
@@ -187,6 +226,60 @@ app.post("/api/products", (req, res) => {
   }
 });
 app.get("/api/lots", (_req, res) => res.json(lotQuery.all().map(toPublicLot)));
+app.post("/api/lots", (req, res) => {
+  const { productCode, code, quantity, warehouse, expiry, responsible = "María Flores" } = req.body;
+  const normalizedCode = typeof code === "string" ? code.trim().toUpperCase() : "";
+  const product = database.prepare("SELECT id FROM products WHERE code=? AND status='Activo'").get(productCode);
+  const location = database.prepare("SELECT name FROM warehouses WHERE name=? AND status='Activo'").get(warehouse);
+  if (!product || !normalizedCode || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0 || !location || !/^[A-Z0-9]+-\d{6}-[A-Z0-9]+$/.test(normalizedCode) || !/^\d{4}-\d{2}-\d{2}$/.test(String(expiry || ""))) {
+    return res.status(400).json({ error: "Producto, código con formato AAA-YYMMDD-X, cantidad, almacén y vencimiento válido son obligatorios." });
+  }
+  if (String(expiry) <= new Date().toISOString().slice(0, 10)) return res.status(400).json({ error: "El vencimiento debe ser posterior a la fecha actual." });
+  try {
+    const create = database.transaction(() => {
+      const lot = database.prepare("INSERT INTO lots (product_id,code,quantity,warehouse,expiry,quality) VALUES (?,?,?,?,?,'Pendiente')").run(product.id, normalizedCode, Number(quantity), location.name, expiry);
+      database.prepare("INSERT INTO movements (type,product_id,lot_id,quantity,origin,destination,responsible) VALUES (?,?,?,?,?,?,?)").run("Ingreso de lote", product.id, lot.lastInsertRowid, Number(quantity), "Recepción", location.name, responsible);
+      return lot.lastInsertRowid;
+    });
+    const id = create();
+    res.status(201).json(toPublicLot(database.prepare("SELECT l.*, p.name product, p.code productCode, p.unit FROM lots l JOIN products p ON p.id=l.product_id WHERE l.id=?").get(id)));
+  } catch (error) {
+    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return res.status(409).json({ error: "El código de lote ya existe." });
+    throw error;
+  }
+});
+app.get("/api/traceability/:lotCode", (req, res) => {
+  const lot = database.prepare(`
+    SELECT l.*, p.name product, p.code productCode, p.unit,
+           COALESCE((
+             SELECT i.status FROM quality_inspections i
+             WHERE i.lot_id = l.id ORDER BY i.id DESC LIMIT 1
+           ), l.quality) quality
+    FROM lots l JOIN products p ON p.id = l.product_id
+    WHERE lower(l.code) = lower(?)
+  `).get(req.params.lotCode);
+  if (!lot) return res.status(404).json({ error: "No existe un lote con ese código." });
+  const events = [
+    ...database.prepare(`
+      SELECT 'Movimiento de inventario' stage, m.created_at eventDate, m.type detail,
+             m.destination place, m.responsible user
+      FROM movements m WHERE m.lot_id = ?
+    `).all(lot.id),
+    ...database.prepare(`
+      SELECT 'Control de calidad' stage, i.created_at eventDate,
+             i.status || ' · ' || i.test detail, 'Laboratorio de calidad' place,
+             'Control de calidad' user
+      FROM quality_inspections i WHERE i.lot_id = ?
+    `).all(lot.id),
+    ...database.prepare(`
+      SELECT 'Despacho' stage, d.scheduled_at eventDate,
+             d.status || ' · ' || d.client detail, d.route place,
+             'Despachos' user
+      FROM dispatches d WHERE d.lot_id = ?
+    `).all(lot.id),
+  ].sort((first, second) => String(first.eventDate).localeCompare(String(second.eventDate)));
+  res.json({ lot: toPublicLot(lot), events });
+});
 app.get("/api/movements", (_req, res) => res.json(database.prepare(`
   SELECT m.*, p.name product, l.code lot FROM movements m JOIN products p ON p.id=m.product_id JOIN lots l ON l.id=m.lot_id ORDER BY m.created_at DESC LIMIT 50
 `).all()));
@@ -253,7 +346,7 @@ app.patch("/api/quality-inspections/:id", (req, res) => {
   const transaction = database.transaction(() => {
     database.prepare("UPDATE quality_inspections SET status=? WHERE id=?").run(status, req.params.id);
     const inspection = database.prepare("SELECT lot_id FROM quality_inspections WHERE id=?").get(req.params.id);
-    if (inspection) database.prepare("UPDATE lots SET quality=? WHERE id=?").run(status === "Liberado" ? "Liberado" : status === "Retenido" ? "Retenido" : "Liberado", inspection.lot_id);
+    if (inspection) database.prepare("UPDATE lots SET quality=? WHERE id=?").run(status, inspection.lot_id);
   });
   transaction();
   res.json({ ok: true });

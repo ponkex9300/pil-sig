@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type Dispatch, type Inspection, type Lot, type Movement, type Product, type ProductionOrder, type PurchaseOrder } from "./api";
+import { api, type Dashboard as DashboardData, type Dispatch, type Inspection, type Lot, type Movement, type Product, type ProductionOrder, type PurchaseOrder, type Traceability as TraceabilityData, type Warehouse } from "./api";
 
 type Screen =
   | "inicio"
@@ -48,6 +48,8 @@ type InventoryData = {
   productionOrders: ProductionOrder[];
   inspections: Inspection[];
   dispatches: Dispatch[];
+  warehouses: Warehouse[];
+  dashboard: DashboardData | null;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -63,13 +65,15 @@ function InventoryProvider({ children }: { children: ReactNode }) {
   const [productionOrderData, setProductionOrderData] = useState<ProductionOrder[]>([]);
   const [inspectionData, setInspectionData] = useState<Inspection[]>([]);
   const [dispatchData, setDispatchData] = useState<Dispatch[]>([]);
+  const [warehouseData, setWarehouseData] = useState<Warehouse[]>([]);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
     try {
-      const [nextProducts, nextLots, nextMovements, nextPurchases, nextProduction, nextInspections, nextDispatches] = await Promise.all([api.products(), api.lots(), api.movements(), api.purchaseOrders(), api.productionOrders(), api.inspections(), api.dispatches()]);
+      const [nextProducts, nextLots, nextMovements, nextPurchases, nextProduction, nextInspections, nextDispatches, nextWarehouses, nextDashboard] = await Promise.all([api.products(), api.lots(), api.movements(), api.purchaseOrders(), api.productionOrders(), api.inspections(), api.dispatches(), api.warehouses(), api.dashboard()]);
       setProductData(nextProducts);
       setLotData(nextLots);
       setMovementData(nextMovements);
@@ -77,6 +81,8 @@ function InventoryProvider({ children }: { children: ReactNode }) {
       setProductionOrderData(nextProduction);
       setInspectionData(nextInspections);
       setDispatchData(nextDispatches);
+      setWarehouseData(nextWarehouses);
+      setDashboardData(nextDashboard);
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No se pudo conectar con la base de datos.");
@@ -86,7 +92,7 @@ function InventoryProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => { void refresh(); }, []);
-  return <InventoryContext.Provider value={{ products: productData, lots: lotData, movements: movementData, purchaseOrders: purchaseOrderData, productionOrders: productionOrderData, inspections: inspectionData, dispatches: dispatchData, loading, error, refresh }}>{children}</InventoryContext.Provider>;
+  return <InventoryContext.Provider value={{ products: productData, lots: lotData, movements: movementData, purchaseOrders: purchaseOrderData, productionOrders: productionOrderData, inspections: inspectionData, dispatches: dispatchData, warehouses: warehouseData, dashboard: dashboardData, loading, error, refresh }}>{children}</InventoryContext.Provider>;
 }
 
 function useInventory() {
@@ -178,7 +184,7 @@ function SearchBox({ value, onChange, placeholder = "Buscar..." }: { value: stri
   return <label className="relative block min-w-0 flex-1"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><Icon name="search" size={17} /></span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" /></label>;
 }
 
-function AppShell({ screen, setScreen, children }: { screen: Screen; setScreen: (screen: Screen) => void; children: ReactNode }) {
+function AppShell({ screen, setScreen, onTraceabilityLot, children }: { screen: Screen; setScreen: (screen: Screen) => void; onTraceabilityLot: (code: string) => void; children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const inventoryScreens: Screen[] = ["resumen", "productos", "lotes", "movimiento"];
   const navigate = (next: Screen) => { setScreen(next); setMobileOpen(false); };
@@ -235,20 +241,21 @@ function Card({ title, subtitle, action, children }: { title: string; subtitle?:
 }
 
 function Dashboard({ setScreen }: { setScreen: (screen: Screen) => void }) {
-  const { movements: liveMovements } = useInventory();
+  const { movements: liveMovements, dashboard, lots: liveLots } = useInventory();
+  const metrics = dashboard ?? { stock: 0, lowStock: 0, expiring: 0, movementsToday: 0, blocked: 0, products: 0, policies: { inventory: "Perpetuo", rotation: "FEFO / FIFO", traceability: "Por lote", qualityGate: "Bloqueo por calidad" } };
   return <div className="space-y-6">
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <StatCard label="Unidades disponibles" value="17.516" detail="En 4 almacenes activos" icon="package" tone="green" />
-      <StatCard label="Productos con stock bajo" value="3" detail="Requieren reposición" icon="arrowDown" tone="red" />
-      <StatCard label="Lotes próximos a vencer" value="2" detail="Dentro de los próximos 15 días" icon="clock" tone="amber" />
-      <StatCard label="Movimientos del día" value="18" detail="12 ingresos · 6 salidas" icon="arrowUp" tone="blue" />
+      <StatCard label="Unidades disponibles" value={metrics.stock.toLocaleString("es-BO")} detail={`${metrics.products} productos · inventario perpetuo`} icon="package" tone="green" />
+      <StatCard label="Productos con stock bajo" value={String(metrics.lowStock)} detail="Según punto de reorden" icon="arrowDown" tone="red" />
+      <StatCard label="Lotes próximos a vencer" value={String(metrics.expiring)} detail="FEFO · próximos 15 días" icon="clock" tone="amber" />
+      <StatCard label="Movimientos del día" value={String(metrics.movementsToday)} detail={`${metrics.blocked} lotes bloqueados por calidad o vencimiento`} icon="arrowUp" tone="blue" />
     </div>
+    <Card title="Control de operación" subtitle="Indicadores definidos en el Informe Final.pdf"><div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">{[[metrics.policies.inventory, "Modelo de inventario"], [metrics.policies.rotation, "Rotación física"], [metrics.policies.traceability, "Trazabilidad"], [metrics.policies.qualityGate, "Puerta de calidad"]].map(([value, label]) => <div key={label} className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4"><div className="text-sm font-bold text-emerald-900">{value}</div><div className="mt-1 text-xs text-emerald-700">{label}</div></div>)}</div></Card>
     <div className="grid gap-6 xl:grid-cols-[1fr_1.6fr]">
-      <Card title="Alertas prioritarias" subtitle="Atención requerida">
+      <Card title="Alertas prioritarias" subtitle="Calculadas desde existencias y calidad">
         <div className="divide-y divide-slate-100">
-          <button onClick={() => setScreen("lotes")} className="flex w-full items-start gap-3 p-4 text-left transition hover:bg-slate-50"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Icon name="alert" size={18} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">Stock crítico: Queso Edam 1 kg</span><span className="mt-1 block text-xs text-slate-500">96 kg disponibles · mínimo 150 kg</span></span><Icon name="chevron" size={16} /></button>
-          <button onClick={() => setScreen("lotes")} className="flex w-full items-start gap-3 p-4 text-left transition hover:bg-slate-50"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><Icon name="clock" size={18} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">Lote QED-250228-A vence pronto</span><span className="mt-1 block text-xs text-slate-500">Vence el 19 mar 2025 · estado retenido</span></span><Icon name="chevron" size={16} /></button>
-          <button onClick={() => setScreen("lotes")} className="flex w-full items-start gap-3 p-4 text-left transition hover:bg-slate-50"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><Icon name="clock" size={18} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">Lote YGF-250312-C vence pronto</span><span className="mt-1 block text-xs text-slate-500">620 unidades · vence en 12 días</span></span><Icon name="chevron" size={16} /></button>
+          {liveLots.filter((lot) => lot.quality !== "Liberado").slice(0, 3).map((lot) => <button key={lot.code} onClick={() => setScreen("lotes")} className="flex w-full items-start gap-3 p-4 text-left transition hover:bg-slate-50"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><Icon name="alert" size={18} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-slate-800">Lote bloqueado: {lot.code}</span><span className="mt-1 block text-xs text-slate-500">{lot.product} · estado {lot.quality}</span></span><Icon name="chevron" size={16} /></button>)}
+          {!liveLots.some((lot) => lot.quality !== "Liberado") && <div className="p-4 text-sm text-slate-500">No hay alertas de calidad activas.</div>}
         </div>
       </Card>
       <Card title="Últimos movimientos" subtitle="Actividad reciente" action={<Button variant="ghost" onClick={() => setScreen("movimiento")}>Ver historial <Icon name="chevron" size={15} /></Button>}>
@@ -281,27 +288,52 @@ function ProductModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><div className="text-xl font-bold">Nuevo producto</div><div className="mt-1 text-sm text-slate-500">Crear un registro en el catálogo maestro</div></div><button aria-label="Cerrar" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><Icon name="x" /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><Field label="Código"><Input value={form.code} onChange={(value) => setForm({ ...form, code: value })} placeholder="Ej. YOG-015" /></Field><Field label="Nombre"><Input value={form.name} onChange={(value) => setForm({ ...form, name: value })} placeholder="Nombre comercial" /></Field><Field label="Categoría"><Select value={form.category} onChange={(value) => setForm({ ...form, category: value })}><option>Leches</option><option>Yogures</option><option>Quesos</option><option>Mantequillas</option></Select></Field><Field label="Unidad de medida"><Select value={form.unit} onChange={(value) => setForm({ ...form, unit: value })}><option>Unidad</option><option>Kilogramo</option><option>Litro</option></Select></Field></div>{error && <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}<div className="mt-6 flex justify-end gap-3"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={() => void save()}>Guardar producto</Button></div></div></div>;
 }
 
-function Lots({ setScreen }: { setScreen: (screen: Screen) => void }) {
-  const { lots: liveLots } = useInventory();
+function Lots({ setScreen, onTraceabilityLot }: { setScreen: (screen: Screen) => void; onTraceabilityLot: (code: string) => void }) {
+  const { lots: liveLots, products, warehouses, refresh } = useInventory();
   const [query, setQuery] = useState("");
-  const filtered = liveLots.filter((lot) => `${lot.product} ${lot.productCode} ${lot.lot} ${lot.warehouse}`.toLowerCase().includes(query.toLowerCase()));
-  return <Card title="Inventario disponible" subtitle="Datos transaccionales agrupados por lote">
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ productCode: "", code: "", quantity: "1", warehouse: "", expiry: "" });
+  const filtered = liveLots.filter((lot) => `${lot.product} ${lot.productCode} ${lot.code} ${lot.warehouse}`.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => {
+    if (!form.productCode && products.length) setForm((current) => ({ ...current, productCode: products.find((item) => item.status === "Activo")?.code ?? products[0].code }));
+    if (!form.warehouse && warehouses.length) setForm((current) => ({ ...current, warehouse: warehouses[0].name }));
+    if (!form.expiry) { const date = new Date(); date.setDate(date.getDate() + 30); setForm((current) => ({ ...current, expiry: date.toISOString().slice(0, 10) })); }
+  }, [products, warehouses, form.productCode, form.warehouse, form.expiry]);
+  const save = async () => {
+    try {
+      setError(null);
+      await api.createLot({ ...form, quantity: Number(form.quantity) });
+      setCreating(false);
+      setForm((current) => ({ ...current, code: "", quantity: "1" }));
+      await refresh();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "No se pudo crear el lote.");
+    }
+  };
+  return <div className="space-y-5">
+    {creating && <Card title="Crear lote por recepción o producción" subtitle="El lote queda pendiente de calidad y registra automáticamente su ingreso inicial."><div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-5"><Field label="Producto *"><Select value={form.productCode} onChange={(value) => setForm({ ...form, productCode: value })}>{products.filter((item) => item.status === "Activo").map((item) => <option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}</Select></Field><Field label="Código de lote *" hint="Ej. YGF-261022-A"><Input value={form.code} onChange={(value) => setForm({ ...form, code: value.toUpperCase() })} placeholder="AAA-YYMMDD-X" /></Field><Field label="Cantidad *"><Input type="number" min="0.01" value={form.quantity} onChange={(value) => setForm({ ...form, quantity: value })} /></Field><Field label="Almacén *"><Select value={form.warehouse} onChange={(value) => setForm({ ...form, warehouse: value })}>{warehouses.filter((item) => item.status === "Activo").map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</Select></Field><Field label="Vencimiento *"><Input type="date" value={form.expiry} onChange={(value) => setForm({ ...form, expiry: value })} /></Field></div>{error && <div className="mx-5 mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}<div className="flex justify-end gap-3 px-5 pb-5"><Button variant="secondary" onClick={() => setCreating(false)}>Cancelar</Button><Button onClick={() => void save()}>Crear lote</Button></div></Card>}
+    <Card title="Inventario disponible" subtitle="Datos transaccionales agrupados por lote" action={<Button icon="plus" onClick={() => setCreating(true)}>Nuevo lote</Button>}>
     <div className="flex flex-wrap gap-3 border-b border-slate-100 p-4"><SearchBox value={query} onChange={setQuery} placeholder="Buscar producto, lote o almacén" /><Button variant="secondary" icon="warehouse">Todos los almacenes</Button><Button variant="secondary" icon="filter">Calidad y vencimiento</Button></div>
-    <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">{["Producto", "Código de lote", "Disponible", "Almacén", "Vencimiento", "Estado de calidad", ""].map((item) => <th key={item} className="whitespace-nowrap px-5 py-3 font-semibold">{item}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{filtered.map((lot) => <tr key={lot.lot} className={lot.quality === "Retenido" ? "bg-amber-50/30" : "hover:bg-slate-50/70"}><td className="px-5 py-4"><div className="font-semibold text-slate-800">{lot.product}</div><div className="mt-0.5 text-xs text-slate-400">{lot.productCode}</div></td><td className="px-5 py-4"><button onClick={() => setScreen("trazabilidad")} className="font-mono text-xs font-bold text-emerald-700 hover:underline">{lot.lot}</button></td><td className="px-5 py-4 font-bold text-slate-800">{lot.quantity}</td><td className="px-5 py-4 text-slate-600">{lot.warehouse}</td><td className="px-5 py-4"><div className="font-medium text-slate-700">{lot.expiry}</div><div className={`mt-0.5 text-xs font-semibold ${lot.expiryNote.startsWith("En") ? "text-amber-600" : "text-slate-400"}`}>{lot.expiryNote}</div></td><td className="px-5 py-4"><Status tone={lot.quality === "Liberado" ? "green" : "amber"}>{lot.quality}</Status></td><td className="px-5 py-4"><button aria-label="Identificación QR o RFID" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Icon name="scan" /></button></td></tr>)}</tbody></table></div>
+    <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">{["Producto", "Código de lote", "Disponible", "Almacén", "Vencimiento", "Estado de calidad", ""].map((item) => <th key={item} className="whitespace-nowrap px-5 py-3 font-semibold">{item}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{filtered.map((lot) => <tr key={lot.code} className={lot.quality === "Retenido" ? "bg-amber-50/30" : "hover:bg-slate-50/70"}><td className="px-5 py-4"><div className="font-semibold text-slate-800">{lot.product}</div><div className="mt-0.5 text-xs text-slate-400">{lot.productCode}</div></td><td className="px-5 py-4"><button onClick={() => { onTraceabilityLot(lot.code); setScreen("trazabilidad"); }} className="font-mono text-xs font-bold text-emerald-700 hover:underline">{lot.code}</button></td><td className="px-5 py-4 font-bold text-slate-800">{lot.quantity}</td><td className="px-5 py-4 text-slate-600">{lot.warehouse}</td><td className="px-5 py-4"><div className="font-medium text-slate-700">{lot.expiry}</div><div className={`mt-0.5 text-xs font-semibold ${lot.expiryNote.startsWith("En") ? "text-amber-600" : "text-slate-400"}`}>{lot.expiryNote}</div></td><td className="px-5 py-4"><Status tone={lot.quality === "Liberado" ? "green" : "amber"}>{lot.quality}</Status></td><td className="px-5 py-4"><button aria-label={`Consultar trazabilidad de ${lot.code}`} onClick={() => { onTraceabilityLot(lot.code); setScreen("trazabilidad"); }} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><Icon name="scan" /></button></td></tr>)}</tbody></table></div>
     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-4 text-xs text-slate-500"><span>{filtered.length} lotes · 4 almacenes</span><span className="flex items-center gap-2"><Icon name="scan" size={15} />Identificación disponible mediante QR / RFID</span></div>
-  </Card>;
+  </Card></div>;
 }
 
 function Movement() {
   const { products: liveProducts, lots: liveLots, refresh } = useInventory();
   const [type, setType] = useState("Transferencia interna");
-  const [product, setProduct] = useState("Queso Edam 1 kg");
-  const [lot, setLot] = useState("QED-250228-A");
+  const [product, setProduct] = useState("");
+  const [lot, setLot] = useState("");
   const [quantity, setQuantity] = useState("48");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const selectedLot = liveLots.find((item) => item.lot === lot);
+  const selectedLot = liveLots.find((item) => item.code === lot);
   const blocked = type === "Salida por despacho" && selectedLot?.quality !== "Liberado";
+  useEffect(() => {
+    if (!product && liveProducts.length) setProduct(liveProducts.find((item) => item.status === "Activo")?.name ?? "");
+    if (!lot && liveLots.length) setLot(liveLots[0].code);
+  }, [liveProducts, liveLots, product, lot]);
   return <div className="grid gap-6 xl:grid-cols-[1.5fr_0.75fr]">
     <Card title="Datos del movimiento" subtitle="Los campos marcados son obligatorios">
       <form className="p-5" onSubmit={(event) => { event.preventDefault(); if (blocked) return; void api.createMovement({ type, lotCode: lot, quantity: Number(quantity), origin: "Cámara fría 01", destination: "Producto terminado", responsible: "María Flores" }).then(async () => { setSubmitted(true); setError(null); await refresh(); }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : "No se pudo registrar el movimiento.")); }}>
@@ -309,7 +341,7 @@ function Movement() {
           <Field label="Tipo de movimiento *"><Select value={type} onChange={setType}><option>Ingreso desde producción</option><option>Transferencia interna</option><option>Salida por despacho</option><option>Ajuste de inventario</option></Select></Field>
           <Field label="Fecha y hora *"><Input type="datetime-local" value="2025-03-12T11:20" /></Field>
           <Field label="Producto *"><Select value={product} onChange={setProduct}>{liveProducts.filter((item) => item.status === "Activo").map((item) => <option key={item.code}>{item.name}</option>)}</Select></Field>
-          <Field label="Lote *"><Select value={lot} onChange={setLot}>{liveLots.filter((item) => item.product === product).map((item) => <option key={item.lot}>{item.lot}</option>)}</Select></Field>
+          <Field label="Lote *"><Select value={lot} onChange={setLot}>{liveLots.filter((item) => item.product === product).map((item) => <option key={item.code} value={item.code}>{item.code}</option>)}</Select></Field>
           <Field label="Cantidad *" hint={`Disponible: ${selectedLot?.quantity ?? "se validará"}`}><Input type="number" value={quantity} onChange={setQuantity} /></Field>
           <Field label="Unidad de medida"><Input value={product.includes("Queso") ? "Kilogramo" : "Unidad"} /></Field>
           <Field label="Ubicación de origen *"><Select><option>Cámara fría 01</option><option>Cámara fría 02</option><option>Producción</option><option>Producto terminado</option></Select></Field>
@@ -317,55 +349,76 @@ function Movement() {
           <Field label="Responsable *"><Select><option>María Flores</option><option>Carlos Rojas</option><option>Jorge Peña</option></Select></Field>
           <Field label="Identificación"><div className="flex gap-2"><div className="flex h-11 flex-1 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500">Lectura QR / RFID</div><Button variant="secondary" icon="scan">Escanear</Button></div></Field>
         </div>
-        {blocked && <div className="mt-5 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800"><Icon name="alert" /><div><div className="text-sm font-bold">Despacho bloqueado por control de calidad</div><div className="mt-1 text-xs leading-relaxed">El lote QED-250228-A está retenido. Se requiere autorización de Calidad antes de registrar una salida por despacho.</div></div></div>}
+        {blocked && <div className="mt-5 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800"><Icon name="alert" /><div><div className="text-sm font-bold">Despacho bloqueado por control de calidad</div><div className="mt-1 text-xs leading-relaxed">El lote {lot} está en estado {selectedLot?.quality}. Se requiere autorización de Calidad antes de registrar una salida.</div></div></div>}
         {submitted && <div className="mt-5 flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-800"><Icon name="check" /><div><div className="text-sm font-bold">Movimiento registrado</div><div className="mt-1 text-xs">La transacción quedó guardada en SQLite y actualizó la existencia del lote.</div></div></div>}
         {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
         <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-5"><Button variant="secondary">Cancelar</Button><Button type="submit" disabled={blocked}>Registrar movimiento</Button></div>
       </form>
     </Card>
     <div className="space-y-5">
-      <Card title="Resumen de selección"><div className="space-y-4 p-5 text-sm"><div><div className="text-xs text-slate-400">Producto</div><div className="mt-1 font-semibold">{product}</div></div><div><div className="text-xs text-slate-400">Lote</div><div className="mt-1 font-mono font-bold text-emerald-700">{lot}</div></div><div><div className="text-xs text-slate-400">Estado de calidad</div><div className="mt-2"><Status tone={lot === "QED-250228-A" ? "amber" : "green"}>{lot === "QED-250228-A" ? "Retenido" : "Liberado"}</Status></div></div></div></Card>
+      <Card title="Resumen de selección"><div className="space-y-4 p-5 text-sm"><div><div className="text-xs text-slate-400">Producto</div><div className="mt-1 font-semibold">{product || "Selecciona un producto"}</div></div><div><div className="text-xs text-slate-400">Lote</div><div className="mt-1 font-mono font-bold text-emerald-700">{lot || "Selecciona un lote"}</div></div><div><div className="text-xs text-slate-400">Estado de calidad</div><div className="mt-2"><Status tone={selectedLot?.quality === "Liberado" ? "green" : "amber"}>{selectedLot?.quality ?? "Pendiente de selección"}</Status></div></div></div></Card>
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-5"><div className="flex gap-3 text-blue-800"><Icon name="scan" /><div><div className="text-sm font-bold">Registro con QR / RFID</div><div className="mt-1 text-xs leading-relaxed text-blue-700">Escanee la etiqueta para completar producto y lote, reducir errores y registrar el evento de trazabilidad.</div></div></div></div>
     </div>
   </div>;
 }
 
-function Traceability() {
-  const { lots: liveLots, movements: liveMovements } = useInventory();
-  const [query, setQuery] = useState("QED-250228-A");
-  const [searched, setSearched] = useState(true);
-  const selectedLot = liveLots.find((item) => item.lot.toLowerCase() === query.toLowerCase()) ?? liveLots[0];
-  const timeline = selectedLot ? liveMovements.filter((item) => item.lot === selectedLot.lot).map((item) => ({ stage: item.type, date: item.time ?? "Registrado", place: item.destination ?? "Inventario", detail: `${item.type} de ${item.quantity} para el lote ${item.lot}.`, user: item.responsible ?? "Sistema", done: true })) : [];
-  if (!selectedLot) return <Card title="Consultar trazabilidad" subtitle="No hay lotes registrados en la base de datos"><div className="p-6 text-sm text-slate-500">Crea o recibe inventario para consultar su historial.</div></Card>;
+function Traceability({ lotCode }: { lotCode: string }) {
+  const { lots: liveLots } = useInventory();
+  const [query, setQuery] = useState(lotCode);
+  const [searched, setSearched] = useState(false);
+  const [trace, setTrace] = useState<TraceabilityData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { if (lotCode) { setQuery(lotCode); void searchLot(lotCode); } }, [lotCode]);
+  async function searchLot(code: string) {
+    try {
+      setError(null);
+      setTrace(await api.traceability(code.trim()));
+      setSearched(true);
+    } catch (requestError) {
+      setTrace(null);
+      setSearched(true);
+      setError(requestError instanceof Error ? requestError.message : "No se pudo consultar la trazabilidad.");
+    }
+  }
+  const search = async () => {
+    const code = query.trim();
+    if (!code) { setError("Ingresa un código de lote."); return; }
+    await searchLot(code);
+  };
+  const selectedLot = trace?.lot ?? liveLots.find((item) => item.code.toLowerCase() === query.toLowerCase());
   return <div className="space-y-6">
     <Card title="Buscar lote" subtitle="Ingrese o escanee una identificación para consultar su historial">
-      <div className="flex flex-wrap gap-3 p-5"><SearchBox value={query} onChange={setQuery} placeholder="Ej. QED-250228-A" /><Button variant="secondary" icon="scan">Escanear QR / RFID</Button><Button icon="search" onClick={() => setSearched(true)}>Consultar</Button></div>
+      <div className="flex flex-wrap gap-3 p-5"><SearchBox value={query} onChange={(value) => { setQuery(value); setError(null); }} placeholder="Ej. QED-250228-A" /><Button variant="secondary" icon="scan">Escanear QR / RFID</Button><Button icon="search" onClick={() => void search()}>Consultar</Button></div>
     </Card>
-    {searched && <div className="grid gap-6 xl:grid-cols-[0.7fr_1.5fr]">
+    {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
+    {searched && selectedLot && <div className="grid gap-6 xl:grid-cols-[0.7fr_1.5fr]">
       <div className="space-y-5">
         <Card title="Información del lote"><div className="p-5"><div className="flex items-start justify-between gap-3"><div><div className="font-mono text-lg font-extrabold text-emerald-700">{selectedLot.lot}</div><div className="mt-1 text-sm font-semibold">{selectedLot.product}</div></div><Status tone={selectedLot.quality === "Liberado" ? "green" : "amber"}>{selectedLot.quality}</Status></div><dl className="mt-6 grid grid-cols-2 gap-x-4 gap-y-5 text-sm"><div><dt className="text-xs text-slate-400">Código</dt><dd className="mt-1 font-semibold">{selectedLot.productCode}</dd></div><div><dt className="text-xs text-slate-400">Cantidad</dt><dd className="mt-1 font-semibold">{selectedLot.quantity}</dd></div><div><dt className="text-xs text-slate-400">Almacén actual</dt><dd className="mt-1 font-semibold">{selectedLot.warehouse}</dd></div><div><dt className="text-xs text-slate-400">Vencimiento</dt><dd className="mt-1 font-semibold">{selectedLot.expiry}</dd></div></dl></div></Card>
         <div className="rounded-xl border border-red-200 bg-red-50 p-5"><div className="flex gap-3 text-red-800"><Icon name="alert" /><div><div className="text-sm font-bold">Restricción activa</div><div className="mt-1 text-xs leading-relaxed">No se permite despachar este lote mientras mantenga el estado Retenido, salvo autorización registrada.</div></div></div></div>
       </div>
       <Card title="Cronología del lote" subtitle="Historial de eventos desde la recepción hasta el despacho" action={<Button variant="secondary" icon="download">Exportar historial</Button>}>
-        <div className="p-5 sm:p-6">{timeline.map((item, index) => <div key={item.stage} className="relative flex gap-4 pb-7 last:pb-0"><div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-4 border-white bg-emerald-600 text-white shadow-sm">{item.done ? <Icon name="check" size={15} /> : <Icon name="clock" size={15} />}</div>{index < timeline.length - 1 && <div className="absolute bottom-0 left-[17px] top-8 w-0.5 bg-slate-200" />}<div className="min-w-0 flex-1 rounded-xl border border-slate-100 bg-slate-50/70 p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div className="font-bold text-slate-800">{item.stage}</div><div className="text-xs font-semibold text-slate-500">{item.date}</div></div><div className="mt-2 text-sm text-slate-600">{item.detail}</div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400"><span className="flex items-center gap-1.5"><Icon name="warehouse" size={14} />{item.place}</span><span className="flex items-center gap-1.5"><Icon name="user" size={14} />{item.user}</span></div></div></div>)}</div>
+        <div className="p-5 sm:p-6">{trace?.events.length ? trace.events.map((item, index) => <div key={`${item.stage}-${item.eventDate}-${index}`} className="relative flex gap-4 pb-7 last:pb-0"><div className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-4 border-white bg-emerald-600 text-white shadow-sm"><Icon name="check" size={15} /></div>{index < trace.events.length - 1 && <div className="absolute bottom-0 left-[17px] top-8 w-0.5 bg-slate-200" />}<div className="min-w-0 flex-1 rounded-xl border border-slate-100 bg-slate-50/70 p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div className="font-bold text-slate-800">{item.stage}</div><div className="text-xs font-semibold text-slate-500">{item.eventDate}</div></div><div className="mt-2 text-sm text-slate-600">{item.detail}</div><div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400"><span className="flex items-center gap-1.5"><Icon name="warehouse" size={14} />{item.place}</span><span className="flex items-center gap-1.5"><Icon name="user" size={14} />{item.user}</span></div></div></div>) : <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">El lote existe, pero todavía no tiene eventos registrados.</div>}</div>
       </Card>
     </div>}
+    {!searched && <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">Escribe un código de lote, por ejemplo QED-250228-A, y presiona Consultar.</div>}
   </div>;
 }
 
 function Home({ setScreen }: { setScreen: (screen: Screen) => void }) {
+  const { dashboard, purchaseOrders, productionOrders, inspections, dispatches } = useInventory();
+  const metrics = dashboard ?? { stock: 0, lowStock: 0, blocked: 0, movementsToday: 0 };
   const shortcuts: { title: string; detail: string; icon: IconName; screen: Screen; alert?: string }[] = [
-    { title: "Compras y recepción", detail: "3 órdenes pendientes", icon: "cart", screen: "compras" },
-    { title: "Inventario", detail: "17.516 unidades disponibles", icon: "boxes", screen: "resumen", alert: "3 alertas" },
-    { title: "Producción", detail: "4 órdenes en proceso", icon: "factory", screen: "produccion" },
-    { title: "Control de calidad", detail: "2 lotes por revisar", icon: "check", screen: "calidad", alert: "Atención" },
+    { title: "Compras y recepción", detail: `${purchaseOrders.filter((item) => item.status !== "Recibida").length} órdenes pendientes`, icon: "cart", screen: "compras" },
+    { title: "Inventario", detail: `${metrics.stock.toLocaleString("es-BO")} unidades disponibles`, icon: "boxes", screen: "resumen", alert: metrics.lowStock ? `${metrics.lowStock} alertas` : undefined },
+    { title: "Producción", detail: `${productionOrders.filter((item) => item.status === "En proceso").length} órdenes en proceso`, icon: "factory", screen: "produccion" },
+    { title: "Control de calidad", detail: `${inspections.filter((item) => item.status === "Pendiente").length} lotes por revisar`, icon: "check", screen: "calidad", alert: inspections.some((item) => item.status === "Pendiente") ? "Atención" : undefined },
     { title: "Trazabilidad", detail: "Consultar historial por lote", icon: "route", screen: "trazabilidad" },
-    { title: "Despachos", detail: "5 pedidos programados", icon: "truck", screen: "despachos" },
+    { title: "Despachos", detail: `${dispatches.filter((item) => item.status !== "Despachado").length} pedidos programados`, icon: "truck", screen: "despachos" },
   ];
   return <div className="space-y-6">
     <div className="rounded-2xl bg-[#174B3A] p-6 text-white shadow-sm sm:p-8"><div className="text-sm font-semibold text-emerald-100">Miércoles, 12 de marzo de 2025</div><div className="mt-2 text-2xl font-bold sm:text-3xl">Buen día, María</div><div className="mt-2 max-w-2xl text-sm leading-relaxed text-emerald-50/75">Monitorea las operaciones de abastecimiento, producción, calidad, inventario y distribución desde un solo lugar.</div><div className="mt-6 flex flex-wrap gap-3"><Button variant="secondary" onClick={() => setScreen("movimiento")} icon="plus">Registrar movimiento</Button><button onClick={() => setScreen("trazabilidad")} className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/20 px-4 text-sm font-semibold text-white hover:bg-white/10"><Icon name="search" size={17} />Consultar lote</button></div></div>
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{shortcuts.map((item) => <button key={item.title} onClick={() => setScreen(item.screen)} className="group flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><Icon name={item.icon} size={21} /></span><span className="min-w-0 flex-1"><span className="flex items-center gap-2 font-bold text-slate-800">{item.title}{item.alert && <Status tone="amber">{item.alert}</Status>}</span><span className="mt-1 block text-sm text-slate-500">{item.detail}</span></span><span className="text-slate-300 transition group-hover:translate-x-1 group-hover:text-emerald-700"><Icon name="chevron" /></span></button>)}</div>
-    <div className="grid gap-6 xl:grid-cols-[1.4fr_0.8fr]"><Card title="Actividad operativa" subtitle="Indicadores de hoy"><div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0">{[["18", "Movimientos"], ["8.240", "Unidades producidas"], ["2", "Lotes retenidos"], ["5", "Despachos"]].map(([value, label]) => <div key={label} className="p-5"><div className="text-2xl font-bold">{value}</div><div className="mt-1 text-xs text-slate-500">{label}</div></div>)}</div></Card><Card title="Próxima prioridad"><button onClick={() => setScreen("calidad")} className="flex w-full items-start gap-3 p-5 text-left hover:bg-slate-50"><span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><Icon name="alert" /></span><span className="flex-1"><span className="block text-sm font-bold">Revisar lote QED-250228-A</span><span className="mt-1 block text-xs leading-relaxed text-slate-500">Retenido por análisis microbiológico complementario.</span></span><Icon name="chevron" size={16} /></button></Card></div>
+    <div className="grid gap-6 xl:grid-cols-[1.4fr_0.8fr]"><Card title="Actividad operativa" subtitle="Indicadores calculados desde la base de datos"><div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0">{[[String(metrics.movementsToday), "Movimientos"], [String(productionOrders.reduce((sum, item) => sum + item.planned_quantity, 0).toLocaleString("es-BO")), "Unidades planificadas"], [String(metrics.blocked), "Lotes bloqueados"], [String(dispatches.filter((item) => item.status !== "Despachado").length), "Despachos pendientes"]].map(([value, label]) => <div key={label} className="p-5"><div className="text-2xl font-bold">{value}</div><div className="mt-1 text-xs text-slate-500">{label}</div></div>)}</div></Card><Card title="Próxima prioridad"><button onClick={() => setScreen("calidad")} className="flex w-full items-start gap-3 p-5 text-left hover:bg-slate-50"><span className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><Icon name="alert" /></span><span className="flex-1"><span className="block text-sm font-bold">{inspections.find((item) => item.status === "Pendiente")?.lot ?? "Sin pendientes de calidad"}</span><span className="mt-1 block text-xs leading-relaxed text-slate-500">{inspections.find((item) => item.status === "Pendiente")?.test ?? "Todos los análisis están atendidos."}</span></span><Icon name="chevron" size={16} /></button></Card></div>
   </div>;
 }
 
@@ -405,7 +458,7 @@ function Quality() {
   const [form, setForm] = useState({ lotCode: "", test: "Microbiología", sample: "", notes: "" });
   const save = async () => { await api.createInspection({ ...form, lotCode: form.lotCode || liveLots[0]?.lot || "" }); setNewInspection(false); await refresh(); };
   const decide = async (item: Inspection, status: string) => { await api.updateInspection(item.id, status); await refresh(); };
-  return <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-3"><StatCard label="Muestras pendientes" value={String(inspections.filter((item) => item.status === "Pendiente").length)} detail="Requieren análisis" icon="clock" tone="amber" /><StatCard label="Lotes liberados" value={String(inspections.filter((item) => item.status === "Liberado").length)} detail="Disponibles para despacho" icon="check" tone="green" /><StatCard label="Lotes retenidos" value={String(inspections.filter((item) => item.status === "Retenido").length)} detail="Despacho bloqueado" icon="alert" tone="red" /></div>{newInspection && <Card title="Nueva inspección"><div className="grid gap-4 p-5 sm:grid-cols-2"><Field label="Lote"><Select value={form.lotCode} onChange={(value) => setForm({ ...form, lotCode: value })}>{liveLots.map((lot) => <option key={lot.lot} value={lot.lot}>{lot.lot} · {lot.product}</option>)}</Select></Field><Field label="Análisis"><Input value={form.test} onChange={(value) => setForm({ ...form, test: value })} /></Field><Field label="Muestra"><Input value={form.sample} onChange={(value) => setForm({ ...form, sample: value })} placeholder="CC-0000" /></Field><Field label="Notas"><Input value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} /></Field><div className="flex justify-end gap-3 sm:col-span-2"><Button variant="secondary" onClick={() => setNewInspection(false)}>Cancelar</Button><Button onClick={() => void save()}>Crear inspección</Button></div></div></Card>}<Card title="Inspecciones de calidad" subtitle="Decisiones persistentes afectan la disponibilidad para despacho" action={<Button icon="plus" onClick={() => setNewInspection(true)}>Nueva inspección</Button>}><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-50 text-xs uppercase text-slate-500">{["Lote", "Producto", "Análisis", "Muestra", "Estado", "Acciones"].map((label) => <th key={label} className="px-5 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{inspections.map((item) => <tr key={item.id}><td className="px-5 py-4 font-mono text-xs font-bold text-emerald-700">{item.lot}</td><td className="px-5 py-4 font-semibold">{item.product}</td><td className="px-5 py-4 text-slate-600">{item.test}</td><td className="px-5 py-4">{item.sample}</td><td className="px-5 py-4"><Status tone={item.status === "Liberado" ? "green" : item.status === "Rechazado" ? "red" : "amber"}>{item.status}</Status></td><td className="px-5 py-4"><div className="flex gap-1">{item.status !== "Liberado" && <Button variant="ghost" onClick={() => void decide(item, "Liberado")}>Liberar</Button>}{item.status !== "Rechazado" && <Button variant="ghost" onClick={() => void decide(item, "Rechazado")}>Rechazar</Button>}</div></td></tr>)}</tbody></table></div></Card></div>;
+  return <div className="space-y-5"><div className="grid gap-4 sm:grid-cols-3"><StatCard label="Muestras pendientes" value={String(inspections.filter((item) => item.status === "Pendiente").length)} detail="Requieren análisis" icon="clock" tone="amber" /><StatCard label="Lotes liberados" value={String(inspections.filter((item) => item.status === "Liberado").length)} detail="Disponibles para despacho" icon="check" tone="green" /><StatCard label="Lotes retenidos" value={String(inspections.filter((item) => item.status === "Retenido").length)} detail="Despacho bloqueado" icon="alert" tone="red" /></div>{newInspection && <Card title="Nueva inspección"><div className="grid gap-4 p-5 sm:grid-cols-2"><Field label="Lote"><Select value={form.lotCode} onChange={(value) => setForm({ ...form, lotCode: value })}>{liveLots.map((lot) => <option key={lot.lot} value={lot.lot}>{lot.lot} · {lot.product}</option>)}</Select></Field><Field label="Análisis"><Input value={form.test} onChange={(value) => setForm({ ...form, test: value })} /></Field><Field label="Muestra"><Input value={form.sample} onChange={(value) => setForm({ ...form, sample: value })} placeholder="CC-0000" /></Field><Field label="Notas"><Input value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} /></Field><div className="flex justify-end gap-3 sm:col-span-2"><Button variant="secondary" onClick={() => setNewInspection(false)}>Cancelar</Button><Button onClick={() => void save()}>Crear inspección</Button></div></div></Card>}<Card title="Inspecciones de calidad" subtitle="Decisiones persistentes afectan la disponibilidad para despacho" action={<Button icon="plus" onClick={() => setNewInspection(true)}>Nueva inspección</Button>}><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-50 text-xs uppercase text-slate-500">{["Lote", "Producto", "Análisis", "Muestra", "Estado", "Acciones"].map((label) => <th key={label} className="px-5 py-3 font-semibold">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{inspections.map((item) => <tr key={item.id}><td className="px-5 py-4 font-mono text-xs font-bold text-emerald-700">{item.lot}</td><td className="px-5 py-4 font-semibold">{item.product}</td><td className="px-5 py-4 text-slate-600">{item.test}</td><td className="px-5 py-4">{item.sample}</td><td className="px-5 py-4"><Status tone={item.status === "Liberado" ? "green" : item.status === "Rechazado" ? "red" : "amber"}>{item.status}</Status></td><td className="px-5 py-4"><div className="flex flex-wrap gap-1">{item.status !== "Liberado" && <Button variant="ghost" onClick={() => void decide(item, "Liberado")}>Liberar</Button>}{item.status !== "Retenido" && <Button variant="ghost" onClick={() => void decide(item, "Retenido")}>Retener</Button>}{item.status !== "Rechazado" && <Button variant="ghost" onClick={() => void decide(item, "Rechazado")}>Rechazar</Button>}</div></td></tr>)}</tbody></table></div></Card></div>;
 }
 
 function Dispatches() {
@@ -431,20 +484,21 @@ function Settings() {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("inicio");
+  const [traceabilityCode, setTraceabilityCode] = useState("");
   const content = useMemo(() => {
     if (screen === "inicio") return <Home setScreen={setScreen} />;
     if (screen === "compras") return <Purchases />;
     if (screen === "resumen") return <Dashboard setScreen={setScreen} />;
     if (screen === "productos") return <Products />;
-    if (screen === "lotes") return <Lots setScreen={setScreen} />;
+    if (screen === "lotes") return <Lots setScreen={setScreen} onTraceabilityLot={setTraceabilityCode} />;
     if (screen === "movimiento") return <Movement />;
     if (screen === "produccion") return <Production />;
     if (screen === "calidad") return <Quality />;
-    if (screen === "trazabilidad") return <Traceability />;
+    if (screen === "trazabilidad") return <Traceability lotCode={traceabilityCode} />;
     if (screen === "despachos") return <Dispatches />;
     return <Settings />;
-  }, [screen]);
-  return <InventoryProvider><InventoryStatus /><AppShell screen={screen} setScreen={setScreen}>{content}</AppShell></InventoryProvider>;
+  }, [screen, traceabilityCode]);
+  return <InventoryProvider><InventoryStatus /><AppShell screen={screen} setScreen={setScreen} onTraceabilityLot={setTraceabilityCode}>{content}</AppShell></InventoryProvider>;
 }
 
 function InventoryStatus() {
