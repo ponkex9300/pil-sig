@@ -159,7 +159,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 
 function Button({ children, variant = "primary", icon, onClick, type = "button", disabled = false }: { children: ReactNode; variant?: "primary" | "secondary" | "ghost"; icon?: IconName; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean }) {
-  const styles = variant === "primary" ? "bg-[#174B3A] text-white hover:bg-[#103b2d] shadow-sm" : variant === "secondary" ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50" : "text-slate-600 hover:bg-slate-100";
+  const styles = variant === "primary" ? "bg-[#0A56A8] text-white hover:bg-[#08427F] shadow-sm" : variant === "secondary" ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50" : "text-slate-600 hover:bg-slate-100";
   return <button type={type} disabled={disabled} onClick={onClick} className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition ${styles} disabled:cursor-not-allowed disabled:opacity-45`}>{icon && <Icon name={icon} size={17} />}{children}</button>;
 }
 
@@ -188,11 +188,11 @@ function AppShell({ screen, setScreen, onTraceabilityLot, children }: { screen: 
   const [mobileOpen, setMobileOpen] = useState(false);
   const inventoryScreens: Screen[] = ["resumen", "productos", "lotes", "movimiento"];
   const navigate = (next: Screen) => { setScreen(next); setMobileOpen(false); };
-  return <div className="min-h-screen bg-[#F5F7F8] text-slate-900">
+  return <div className="min-h-screen bg-[#F4F6F9] text-slate-900">
     {mobileOpen && <button aria-label="Cerrar menú" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden" />}
-    <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-[#123B31] text-white shadow-xl transition-transform lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
+    <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-[#1B2A41] text-white shadow-xl transition-transform lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="flex h-20 items-center gap-3 border-b border-white/10 px-6">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-extrabold text-[#174B3A]">PA</div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-extrabold text-[#0A56A8]">PA</div>
         <div><div className="text-base font-bold tracking-tight">PIL Andina S.A.</div><div className="text-xs text-emerald-100/65">ERP SaaS · Prototipo</div></div>
         <button aria-label="Cerrar menú" className="ml-auto text-white/70 lg:hidden" onClick={() => setMobileOpen(false)}><Icon name="x" /></button>
       </div>
@@ -223,7 +223,7 @@ function AppShell({ screen, setScreen, onTraceabilityLot, children }: { screen: 
             ["productos", "Productos"],
             ["lotes", "Existencias por lote"],
             ["movimiento", "Registrar movimiento"],
-          ].map(([key, label]) => <button key={key} onClick={() => navigate(key as Screen)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition ${screen === key ? "bg-[#174B3A] text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"}`}>{label}</button>)}
+          ].map(([key, label]) => <button key={key} onClick={() => navigate(key as Screen)} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition ${screen === key ? "bg-[#0A56A8] text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"}`}>{label}</button>)}
         </div>}
         {children}
       </main>
