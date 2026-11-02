@@ -201,13 +201,19 @@ const lotQuery = database.prepare(`
   SELECT l.*, p.name product, p.code productCode, p.unit
   FROM lots l JOIN products p ON p.id = l.product_id ORDER BY l.expiry
 `);
-const toPublicLot = (lot) => ({ ...lot, lot: lot.code, quantity: lot.quantity.toLocaleString("es-BO"), expiry: new Date(`${lot.expiry}T12:00:00`).toLocaleDateString("es-BO", { day: "2-digit", month: "short", year: "numeric" }), expiryNote: lot.quality === "Retenido" ? "Revisión requerida" : "Vigente" });
+const toPublicLot = (lot) => {
+  const today = new Date();
+  const expiryDate = new Date(`${lot.expiry}T12:00:00`);
+  const daysUntilExpiry = Math.ceil((expiryDate.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86400000);
+  const expiryNote = lot.quality !== "Liberado" ? "Revisión requerida" : daysUntilExpiry < 0 ? "Vencido" : daysUntilExpiry <= 30 ? `Vence en ${daysUntilExpiry} días` : "Vigente";
+  return { ...lot, lot: lot.code, quantity: lot.quantity.toLocaleString("es-BO"), expiryDate: lot.expiry, expiry: expiryDate.toLocaleDateString("es-BO", { day: "2-digit", month: "short", year: "numeric" }), expiryNote };
+};
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 app.get("/api/dashboard", (_req, res) => {
   const products = database.prepare("SELECT COUNT(*) count, COALESCE(SUM(stock), 0) stock FROM (SELECT p.id, COALESCE(SUM(l.quantity), 0) stock FROM products p LEFT JOIN lots l ON l.product_id=p.id GROUP BY p.id)").get();
   const lowStock = database.prepare("SELECT COUNT(*) count FROM (SELECT p.id FROM products p LEFT JOIN lots l ON l.product_id=p.id GROUP BY p.id HAVING COALESCE(SUM(l.quantity),0) <= p.reorder_point)").get().count;
-  const expiring = database.prepare("SELECT COUNT(*) count FROM lots WHERE date(expiry) <= date('now', '+15 day') AND date(expiry) >= date('now')").get().count;
+  const expiring = database.prepare("SELECT COUNT(*) count FROM lots WHERE date(expiry) <= date('now', '+30 day') AND date(expiry) >= date('now')").get().count;
   const blocked = database.prepare("SELECT COUNT(*) count FROM lots WHERE quality <> 'Liberado' OR date(expiry) < date('now')").get().count;
   const movementsToday = database.prepare("SELECT COUNT(*) count FROM movements WHERE date(created_at) = date('now')").get().count;
   res.json({ products: products.count, stock: products.stock, lowStock, expiring, blocked, movementsToday, policies: { inventory: "Perpetuo", rotation: "FEFO para perecederos / FIFO para materiales", traceability: "Por lote", qualityGate: "Despacho bloqueado si no está liberado" } });
@@ -289,6 +295,7 @@ app.post("/api/movements", (req, res) => {
   if (!lot || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0) return res.status(400).json({ error: "Lote y cantidad válida son obligatorios." });
   const amount = Number(quantity);
   if (type === "Salida por despacho" && lot.quality !== "Liberado") return res.status(422).json({ error: "El lote está retenido por Control de Calidad." });
+  if (type === "Salida por despacho" && lot.expiry < new Date().toISOString().slice(0, 10)) return res.status(422).json({ error: "El lote está vencido y no puede despacharse." });
   if (["Salida por despacho", "Transferencia interna"].includes(type) && lot.quantity < amount) return res.status(422).json({ error: "La cantidad supera la existencia disponible." });
   const change = type === "Ingreso desde producción" ? amount : type === "Ajuste de inventario" ? amount : -amount;
   const transaction = database.transaction(() => {

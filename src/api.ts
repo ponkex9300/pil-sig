@@ -16,6 +16,7 @@ export type Lot = {
   lot: string;
   quantity: string;
   warehouse: string;
+  expiryDate: string;
   expiry: string;
   expiryNote: string;
   quality: string;

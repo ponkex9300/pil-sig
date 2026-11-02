@@ -30,9 +30,17 @@ La aplicación representa el piloto integrado propuesto para PIL Andina S.A.:
 - Puntos de reorden, stock de seguridad y clasificación ABC almacenados en los datos maestros.
 - Control por lote desde la recepción hasta el despacho.
 - Puerta de calidad: un lote retenido, rechazado o vencido no puede despacharse.
+- Aplicación FEFO: los selectores de lotes ordenan y preseleccionan el vencimiento más próximo; los lotes que vencen en 30 días o menos generan alertas operativas.
 - Trazabilidad hacia atrás y hacia adelante mediante el historial de movimientos.
 - Panel de control con stock total, bajo stock, vencimientos, lotes bloqueados y movimientos del día.
 - Flujo integrado de abastecimiento, recepción, producción, calidad, almacenamiento y distribución.
+- Dashboard ejecutivo y operativo en una sola vista: KPIs contextualizados con metas, filtros por período y almacén, ranking de existencias, controles de gobierno y cola de excepciones.
+
+### Criterios de diseño del dashboard
+
+La pantalla de inicio prioriza el panorama general y el detalle a demanda. La fila superior concentra indicadores con contexto y estado; la zona central compara magnitudes con barras y agrupa controles relacionados; la zona inferior presenta excepciones y tareas accionables. Se reservan rojo y ámbar para riesgos, se evitan gráficos 3D, circularidad y velocímetros, y la navegación mantiene el patrón de lectura Z/F para reducir la carga visual.
+
+Los indicadores se organizan para apoyar objetivos de gobierno y gestión: control de inventario, continuidad operativa, puerta de calidad, trazabilidad por lote y seguimiento de solicitudes pendientes, en línea con prácticas de COBIT 2019 e ITIL 4.
 
 El endpoint `GET /api/dashboard` calcula los indicadores del panel directamente desde SQLite. Las reglas de rotación y calidad se muestran en la pantalla de resumen para que la operación pueda validarse contra los criterios del piloto.
 
